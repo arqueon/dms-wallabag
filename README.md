@@ -24,7 +24,7 @@ read-it-later queue in the DankBar.
 1. Symlink or copy this directory to `~/.config/DankMaterialShell/plugins/wallabag`,
    then Settings → Plugins → Scan for Plugins → enable **DMS-Wallabag** and add it to a bar section.
 2. In the plugin settings fill in: instance URL, client ID, username.
-3. Enter the client secret and your password in the *Credenciales secretas* section —
+3. Enter the client secret and your password in the *Secret credentials* section —
    they are stored in the system keyring (`secret-tool`, service `dms-wallabag`),
    never in plain text. Equivalent CLI:
 

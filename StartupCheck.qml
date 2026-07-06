@@ -11,8 +11,8 @@ QtObject {
                                 return
                             }
                             done({
-                                "title": "Faltan dependencias para el plugin Wallabag",
-                                "details": "Se necesitan 'curl' y 'secret-tool' (paquete libsecret) en el PATH. Instálalos y vuelve a activar el plugin."
+                                "title": "Missing dependencies for the Wallabag plugin",
+                                "details": "'curl' and 'secret-tool' (libsecret) are required on PATH. Install them and re-enable this plugin."
                             })
                         })
     }

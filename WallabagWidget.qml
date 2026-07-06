@@ -1,9 +1,9 @@
-// WallabagWidget.qml — widget de barra DMS para Wallabag
+// WallabagWidget.qml — DMS bar widget for Wallabag
 //
-// Píldora con el logo de wallabag + contador de no leídas; popout con la lista
-// de entradas (procedencia, extracto, enlace que no cierra la ventana) y
-// acciones por fila: archivar/leído, favorito, borrar, recargar, copiar URL.
-// API: OAuth2 password grant + refresh contra la instancia configurada.
+// Pill with the wallabag logo + unread counter; popout with the entry list
+// (source, excerpt, links that do not close the window) and per-row actions:
+// archive/read, star, delete, re-fetch, copy URL. Multi-select batch actions.
+// API: OAuth2 password grant + refresh against the configured instance.
 
 import QtQuick
 import Quickshell
@@ -18,7 +18,7 @@ PluginComponent {
 
     property var popoutService: null
 
-    // ── Ajustes (pluginData es reactivo) ──────────────────────────────────
+    // ── Settings (pluginData is reactive) ──────────────────────────────────
     property string baseUrl: String(pluginData.baseUrl || "").trim().replace(/\/+$/, "")
     property string clientId: String(pluginData.clientId || "").trim()
     property string username: String(pluginData.username || "").trim()
@@ -28,7 +28,7 @@ PluginComponent {
     property bool showThumbnails: pluginData.showThumbnails !== false
     property string secretsStamp: String(pluginData.secretsStamp || "")
 
-    // ── Secretos (llavero del sistema vía secret-tool) ────────────────────
+    // ── Secrets (system keyring via secret-tool) ────────────────────
     property string clientSecret: ""
     property string password: ""
     property bool secretsLoaded: false
@@ -42,7 +42,7 @@ PluginComponent {
     property string refreshToken: ""
     property double tokenExpiresAt: 0
 
-    // ── Datos ─────────────────────────────────────────────────────────────
+    // ── Data ─────────────────────────────────────────────────────────────
     property var entries: []
     property int unreadTotal: 0
     property string filter: String(pluginData.filter || "unread")
@@ -60,30 +60,30 @@ PluginComponent {
     property int _reqSeq: 0
 
     readonly property var filterOptions: [
-        { label: "No leídas", value: "unread" },
-        { label: "Favoritas", value: "starred" },
-        { label: "Archivo", value: "archive" },
-        { label: "Todas", value: "all" }
+        { label: "Unread", value: "unread" },
+        { label: "Starred", value: "starred" },
+        { label: "Archive", value: "archive" },
+        { label: "All", value: "all" }
     ]
 
     readonly property string headerDetails: {
         if (!secretsLoaded)
-            return "Leyendo credenciales del llavero…"
+            return "Reading credentials from the keyring…"
         if (!configured)
-            return "Configura la conexión en Ajustes → Plugins → Wallabag"
+            return "Configure the connection in Settings → Plugins → Wallabag"
         if (errorMessage !== "")
             return errorMessage
         if (isLoading && entries.length === 0)
-            return "Cargando entradas…"
-        var detail = unreadTotal + " sin leer"
+            return "Loading entries…"
+        var detail = unreadTotal + " unread"
         if (searchTerm !== "")
-            detail += " · búsqueda: " + totalCount + " resultados"
+            detail += " · search: " + totalCount + " results"
         else if (filter !== "unread")
-            detail += " · " + totalCount + " en esta vista"
+            detail += " · " + totalCount + " in this view"
         return detail
     }
 
-    // ── Secretos ──────────────────────────────────────────────────────────
+    // ── Secrets ──────────────────────────────────────────────────────────
 
     function _lookupSecret(key, cb) {
         Proc.runCommand("wallabag.lookup." + key + "." + (++_reqSeq),
@@ -152,17 +152,17 @@ PluginComponent {
         }
     }
 
-    // ── Cliente HTTP (curl vía Proc) ──────────────────────────────────────
+    // ── HTTP client (curl via Proc) ──────────────────────────────────────
 
     function apiCall(method, path, query, form, cb) {
         if (!configured) {
-            cb({ status: 0, json: null, error: "sin configurar" })
+            cb({ status: 0, json: null, error: "not configured" })
             return
         }
         var attempt = retriesLeft => {
             ensureToken((ok, err) => {
                 if (!ok) {
-                    cb({ status: 401, json: null, error: err || "autenticación fallida" })
+                    cb({ status: 401, json: null, error: err || "authentication failed" })
                     return
                 }
                 var url = baseUrl + path
@@ -191,7 +191,7 @@ PluginComponent {
         attempt(1)
     }
 
-    // ── Lectura de entradas ───────────────────────────────────────────────
+    // ── Fetching entries ───────────────────────────────────────────────
 
     function matchesFilter(entry) {
         if (searchTerm !== "")
@@ -286,7 +286,7 @@ PluginComponent {
         fetchEntries(true)
     }
 
-    // ── Acciones sobre entradas ───────────────────────────────────────────
+    // ── Entry actions ───────────────────────────────────────────
 
     function _replaceEntry(id, mapped, keep) {
         var next = []
@@ -356,7 +356,7 @@ PluginComponent {
                 }
                 _replaceEntry(entry.id, null, false)
             } else {
-                ToastService?.showError("Wallabag: no se pudo borrar — " + WB.errorText(res))
+                ToastService?.showError("Wallabag: could not delete — " + WB.errorText(res))
             }
         })
     }
@@ -370,9 +370,9 @@ PluginComponent {
                 contentCache = cache
                 if (expandedId === entry.id)
                     fetchExcerpt(entry.id)
-                ToastService?.showInfo("Contenido recargado")
+                ToastService?.showInfo("Content re-fetched")
             } else if (res.status === 304) {
-                ToastService?.showInfo("Wallabag no pudo recargar el contenido")
+                ToastService?.showInfo("wallabag could not re-fetch the content")
             } else {
                 ToastService?.showError("Wallabag: " + WB.errorText(res))
             }
@@ -389,7 +389,7 @@ PluginComponent {
 
     function copyUrl(entry) {
         Quickshell.execDetached(["dms", "cl", "copy", entry.url])
-        ToastService?.showInfo("URL copiada")
+        ToastService?.showInfo("URL copied")
     }
 
     function addUrl(url) {
@@ -398,21 +398,21 @@ PluginComponent {
             return
         apiCall("POST", "/api/entries.json", null, { url: trimmed }, res => {
             if (res.status === 200) {
-                ToastService?.showInfo("Guardado en Wallabag")
+                ToastService?.showInfo("Saved to Wallabag")
                 refreshAll()
             } else {
-                ToastService?.showError("Wallabag: no se pudo guardar — " + WB.errorText(res))
+                ToastService?.showError("Wallabag: could not save — " + WB.errorText(res))
             }
         })
     }
 
-    // ── Selección múltiple y operaciones por lote ─────────────────────────
+    // ── Multi-select and batch operations ─────────────────────────
 
     property var selectedIds: ({})
     readonly property int selectedCount: Object.keys(selectedIds).length
     property bool batchDeleteArmed: false
 
-    // Cola secuencial: los lotes disparan una petición a la vez
+    // Sequential queue: batches fire one request at a time
     property var _opQueue: []
     property bool _opRunning: false
 
@@ -509,7 +509,7 @@ PluginComponent {
         var selected = _selectedEntries()
         if (selected.length === 0)
             return
-        // si todas ya son favoritas → quitar; si no → marcar todas
+        // if all are already starred → unstar; otherwise → star all
         var makeStarred = !selected.every(e => e.isStarred)
         var targets = selected.filter(e => e.isStarred !== makeStarred)
         if (targets.length === 0) {
@@ -544,7 +544,7 @@ PluginComponent {
                 if (res.status === 200)
                     _replaceEntry(e.id, null, false)
                 else
-                    ToastService?.showError("Wallabag: no se pudo borrar «" + e.title + "»")
+                    ToastService?.showError("Wallabag: could not delete \u201C" + e.title + "\u201D")
                 done()
             })
         }).concat([done => {
@@ -553,7 +553,7 @@ PluginComponent {
         }]))
     }
 
-    // ── Extracto de contenido (bajo demanda, cacheado) ────────────────────
+    // ── Content excerpt (on demand, cached) ────────────────────
 
     function toggleExpand(entry) {
         if (expandedId === entry.id) {
@@ -570,15 +570,15 @@ PluginComponent {
             var cache = Object.assign({}, contentCache)
             if (res.status === 200 && res.json) {
                 var text = WB.excerpt(res.json.content, 480)
-                cache[id] = text !== "" ? text : "(sin contenido extraído)"
+                cache[id] = text !== "" ? text : "(no extracted content)"
             } else {
-                cache[id] = "(no se pudo cargar el extracto)"
+                cache[id] = "(could not load the excerpt)"
             }
             contentCache = cache
         })
     }
 
-    // ── Temporizadores y arranque ─────────────────────────────────────────
+    // ── Timers and startup ─────────────────────────────────────────
 
     Timer {
         id: pollTimer
@@ -626,7 +626,7 @@ PluginComponent {
         })
     }
 
-    // ── Píldoras de la barra ──────────────────────────────────────────────
+    // ── Bar pills ──────────────────────────────────────────────
 
     horizontalBarPill: Component {
         Item {
@@ -707,7 +707,7 @@ PluginComponent {
 
             Component.onDestruction: root.clearSelection()
 
-            // Barra de herramientas: filtros + refrescar + añadir
+            // Toolbar: filters + refresh + add
             Item {
                 id: toolbar
                 width: parent.width
@@ -782,7 +782,7 @@ PluginComponent {
                 }
             }
 
-            // Fila para añadir una URL nueva
+            // Row to add a new URL
             Item {
                 id: addRow
                 width: parent.width
@@ -798,7 +798,7 @@ PluginComponent {
                     anchors.rightMargin: Theme.spacingXS
                     anchors.verticalCenter: parent.verticalCenter
                     height: 32
-                    placeholderText: "https://… (guardar en Wallabag)"
+                    placeholderText: "https://… (save to Wallabag)"
                     onAccepted: {
                         root.addUrl(text)
                         text = ""
@@ -820,7 +820,7 @@ PluginComponent {
                     StyledText {
                         id: saveLabel
                         anchors.centerIn: parent
-                        text: "Guardar"
+                        text: "Save"
                         font.pixelSize: Theme.fontSizeSmall
                         font.weight: Font.Medium
                         color: Theme.primary
@@ -840,7 +840,7 @@ PluginComponent {
                 }
             }
 
-            // Búsqueda
+            // Search
             Item {
                 id: searchRow
                 width: parent.width
@@ -854,7 +854,7 @@ PluginComponent {
                     anchors.rightMargin: Theme.spacingS
                     anchors.verticalCenter: parent.verticalCenter
                     height: 32
-                    placeholderText: "Buscar en Wallabag…"
+                    placeholderText: "Search Wallabag…"
                     text: root.searchTerm
                     onTextEdited: {
                         root.pendingSearch = text
@@ -883,7 +883,7 @@ PluginComponent {
                 }
             }
 
-            // Barra de selección múltiple (visible cuando hay filas marcadas)
+            // Multi-select bar (visible when rows are checked)
             Item {
                 id: selectionRow
                 width: parent.width
@@ -905,7 +905,7 @@ PluginComponent {
                         spacing: Theme.spacingXS
 
                         StyledText {
-                            text: root.selectedCount + " sel."
+                            text: root.selectedCount + " selected"
                             font.pixelSize: Theme.fontSizeSmall
                             font.weight: Font.DemiBold
                             color: Theme.primary
@@ -916,7 +916,7 @@ PluginComponent {
                             iconName: "select_all"
                             buttonSize: 26
                             iconColor: Theme.surfaceVariantText
-                            tooltipText: "Seleccionar todas"
+                            tooltipText: "Select all"
                             onClicked: root.selectAllVisible()
                         }
 
@@ -924,7 +924,7 @@ PluginComponent {
                             iconName: "close"
                             buttonSize: 26
                             iconColor: Theme.surfaceVariantText
-                            tooltipText: "Limpiar selección"
+                            tooltipText: "Clear selection"
                             onClicked: root.clearSelection()
                         }
                     }
@@ -939,7 +939,7 @@ PluginComponent {
                             iconName: "open_in_new"
                             buttonSize: 26
                             iconColor: Theme.surfaceVariantText
-                            tooltipText: "Abrir todas en el navegador"
+                            tooltipText: "Open all in the browser"
                             onClicked: root.batchOpen()
                         }
 
@@ -947,7 +947,7 @@ PluginComponent {
                             iconName: root.filter === "archive" ? "unarchive" : "check_circle"
                             buttonSize: 26
                             iconColor: Theme.surfaceVariantText
-                            tooltipText: root.filter === "archive" ? "Desarchivar seleccionadas" : "Archivar (leídas) seleccionadas"
+                            tooltipText: root.filter === "archive" ? "Unarchive selected" : "Archive (mark read) selected"
                             onClicked: root.batchArchive()
                         }
 
@@ -955,7 +955,7 @@ PluginComponent {
                             iconName: "star"
                             buttonSize: 26
                             iconColor: Theme.surfaceVariantText
-                            tooltipText: "Favorito sí/no (todas)"
+                            tooltipText: "Star / unstar all selected"
                             onClicked: root.batchStar()
                         }
 
@@ -964,15 +964,15 @@ PluginComponent {
                             buttonSize: 26
                             iconColor: root.batchDeleteArmed ? Theme.error : Theme.surfaceVariantText
                             tooltipText: root.batchDeleteArmed
-                                         ? "Pulsa otra vez: borrar " + root.selectedCount + " entradas"
-                                         : "Borrar seleccionadas"
+                                         ? "Click again: delete " + root.selectedCount + " entries"
+                                         : "Delete selected"
                             onClicked: root.batchDelete()
                         }
                     }
                 }
             }
 
-            // Lista de entradas
+            // Entry list
             Item {
                 id: listContainer
                 width: parent.width
@@ -1090,7 +1090,7 @@ PluginComponent {
                                         anchors.fill: parent
                                         hoverEnabled: true
                                         cursorShape: Qt.PointingHandCursor
-                                        // Abre en el navegador SIN cerrar el popout
+                                        // Opens in the browser WITHOUT closing the popout
                                         onClicked: root.openEntry(entryRow.modelData)
                                     }
                                 }
@@ -1148,7 +1148,7 @@ PluginComponent {
                             }
                         }
 
-                        // Detalle expandido: extracto + etiquetas + acciones secundarias
+                        // Expanded detail: excerpt + tags + secondary actions
                         Column {
                             width: parent.width
                             visible: entryRow.expanded
@@ -1158,7 +1158,7 @@ PluginComponent {
                                 width: parent.width
                                 text: root.contentCache[entryRow.modelData.id] !== undefined
                                       ? root.contentCache[entryRow.modelData.id]
-                                      : "Cargando extracto…"
+                                      : "Loading excerpt…"
                                 font.pixelSize: Theme.fontSizeSmall
                                 color: Theme.surfaceText
                                 opacity: 0.9
@@ -1170,7 +1170,7 @@ PluginComponent {
                             StyledText {
                                 visible: entryRow.modelData.originUrl !== ""
                                 width: parent.width
-                                text: "Origen: " + entryRow.modelData.originUrl
+                                text: "Origin: " + entryRow.modelData.originUrl
                                 font.pixelSize: Theme.fontSizeSmall
                                 color: Theme.surfaceVariantText
                                 elide: Text.ElideRight
@@ -1231,7 +1231,7 @@ PluginComponent {
 
                                 StyledText {
                                     visible: root.pendingDeleteId === entryRow.modelData.id
-                                    text: "pulsa otra vez para borrar"
+                                    text: "click again to delete"
                                     font.pixelSize: Theme.fontSizeSmall
                                     color: Theme.error
                                     anchors.verticalCenter: parent.verticalCenter
@@ -1256,7 +1256,7 @@ PluginComponent {
                         StyledText {
                             id: moreLabel
                             anchors.centerIn: parent
-                            text: root.isLoading ? "Cargando…" : "Cargar más"
+                            text: root.isLoading ? "Loading…" : "Load more"
                             font.pixelSize: Theme.fontSizeSmall
                             color: Theme.surfaceVariantText
                         }
@@ -1273,7 +1273,7 @@ PluginComponent {
 
                 }
 
-                // Estado vacío (superpuesto a la lista)
+                // Empty state (overlaid on the list)
                 Column {
                     anchors.centerIn: parent
                     spacing: Theme.spacingS
@@ -1292,14 +1292,14 @@ PluginComponent {
                         width: parent.width
                         text: {
                             if (!root.configured)
-                                return "Configura URL, client ID, usuario y secretos en Ajustes → Plugins → Wallabag"
+                                return "Set the URL, client ID, username and secrets in Settings → Plugins → Wallabag"
                             if (root.isLoading)
-                                return "Cargando entradas…"
+                                return "Loading entries…"
                             if (root.errorMessage !== "")
                                 return root.errorMessage
                             if (root.searchTerm !== "")
-                                return "Sin resultados para «" + root.searchTerm + "»"
-                            return "No hay entradas en esta vista"
+                                return "No results for \u201C" + root.searchTerm + "\u201D"
+                            return "No entries in this view"
                         }
                         font.pixelSize: Theme.fontSizeMedium
                         color: Theme.surfaceVariantText

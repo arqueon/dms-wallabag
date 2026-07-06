@@ -1,7 +1,7 @@
-// WallabagIcon.qml — logo de wallabag tintado al color del tema (claro/oscuro)
-// Por defecto usa la «w» estilizada (recortada del icono oficial, sin padding);
-// con full:true muestra el ualabí completo (para estados vacíos, etc.).
-// Logo: wallabag/logo y wallabag/wallabag (Free Art License 1.3), diseño de Maylis Agniel
+// WallabagIcon.qml — wallabag logo tinted to the theme color (light/dark)
+// By default uses the stylized "w" (cropped from the official icon, no padding);
+// with full:true it shows the whole wallaby (for empty states, etc.).
+// Logo: wallabag/logo and wallabag/wallabag (Free Art License 1.3), design by Maylis Agniel
 
 import QtQuick
 import QtQuick.Effects
@@ -10,13 +10,13 @@ import qs.Common
 Item {
     id: root
 
-    // Altura del glifo; el ancho se deriva de la proporción real del SVG
+    // Glyph height; width derives from the real SVG aspect ratio
     property int size: 18
     property bool full: false
     property color iconColor: Theme.surfaceText
     property real iconOpacity: 0.9
 
-    // viewBox de wallabag-w.svg: 46.9 × 36.6
+    // wallabag-w.svg viewBox: 46.9 × 36.6
     width: full ? size : Math.round(size * 46.9 / 36.6)
     height: size
 

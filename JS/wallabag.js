@@ -1,16 +1,16 @@
-// wallabag.js — helpers puros para el plugin DMS de Wallabag (sin estado)
+// wallabag.js — pure stateless helpers for the DMS Wallabag plugin
 
 function parseCurl(stdout, exitCode) {
-    // curl se invoca con -w "\n%{http_code}": la última línea es el status HTTP
+    // curl runs with -w "\n%{http_code}": the last line is the HTTP status
     var raw = String(stdout || "")
     if (exitCode !== 0 && raw.trim() === "")
-        return { status: 0, json: null, error: "curl terminó con código " + exitCode }
+        return { status: 0, json: null, error: "curl exited with code " + exitCode }
     var cut = raw.lastIndexOf("\n")
     var statusStr = cut >= 0 ? raw.slice(cut + 1).trim() : raw.trim()
     var body = cut >= 0 ? raw.slice(0, cut) : ""
     var status = parseInt(statusStr)
     if (isNaN(status))
-        return { status: 0, json: null, error: "respuesta ilegible de curl" }
+        return { status: 0, json: null, error: "unreadable curl response" }
     var json = null
     if (body.trim() !== "") {
         try { json = JSON.parse(body) } catch (e) { json = null }
@@ -19,7 +19,7 @@ function parseCurl(stdout, exitCode) {
 }
 
 function errorText(res) {
-    if (!res) return "sin respuesta"
+    if (!res) return "no response"
     if (res.error) return res.error
     if (res.json && res.json.error_description) return res.json.error_description
     if (res.json && res.json.error) {
@@ -27,11 +27,11 @@ function errorText(res) {
         if (typeof msg === "object" && msg.message) return msg.message
         return String(msg)
     }
-    if (res.status === 0) return "sin conexión con el servidor"
-    if (res.status === 401) return "credenciales rechazadas (401)"
-    if (res.status === 403) return "acceso denegado (403)"
-    if (res.status === 404) return "no encontrado (404)"
-    return "error HTTP " + res.status
+    if (res.status === 0) return "no connection to the server"
+    if (res.status === 401) return "credentials rejected (401)"
+    if (res.status === 403) return "access denied (403)"
+    if (res.status === 404) return "not found (404)"
+    return "HTTP error " + res.status
 }
 
 function buildQuery(params) {
@@ -53,7 +53,7 @@ function mapEntry(json) {
     if (!json) return null
     return {
         id: json.id,
-        title: (json.title || "").trim() || json.url || "(sin título)",
+        title: (json.title || "").trim() || json.url || "(untitled)",
         url: json.url || json.given_url || "",
         givenUrl: json.given_url || "",
         originUrl: json.origin_url || "",
@@ -103,15 +103,15 @@ function relativeTime(isoDate) {
     var then = Date.parse(isoDate)
     if (isNaN(then)) return ""
     var mins = Math.floor((Date.now() - then) / 60000)
-    if (mins < 1) return "ahora"
-    if (mins < 60) return "hace " + mins + " min"
+    if (mins < 1) return "now"
+    if (mins < 60) return mins + " min ago"
     var hours = Math.floor(mins / 60)
-    if (hours < 24) return "hace " + hours + " h"
+    if (hours < 24) return hours + " h ago"
     var days = Math.floor(hours / 24)
-    if (days === 1) return "ayer"
-    if (days < 30) return "hace " + days + " días"
+    if (days === 1) return "yesterday"
+    if (days < 30) return days + " days ago"
     var d = new Date(then)
-    var months = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"]
+    var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
     var label = d.getDate() + " " + months[d.getMonth()]
     if (d.getFullYear() !== new Date().getFullYear())
         label += " " + d.getFullYear()

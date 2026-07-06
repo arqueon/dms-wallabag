@@ -1,8 +1,8 @@
-// Settings.qml — ajustes del plugin Wallabag
+// Settings.qml — settings UI for the Wallabag plugin
 //
-// Los datos no sensibles se guardan en plugin_settings.json (StringSetting…).
-// El client secret y la contraseña van al llavero del sistema vía secret-tool
-// (service=dms-wallabag); aquí solo se escriben, nunca se muestran.
+// Non-sensitive values are stored in plugin_settings.json (StringSetting…).
+// The client secret and the password go to the system keyring via secret-tool
+// (service=dms-wallabag); they are only written here, never displayed.
 
 import QtQuick
 import qs.Common
@@ -49,7 +49,7 @@ PluginSettings {
 
     StyledText {
         width: parent.width
-        text: "Servidor"
+        text: "Server"
         font.pixelSize: Theme.fontSizeLarge
         font.weight: Font.Bold
         color: Theme.surfaceText
@@ -57,31 +57,31 @@ PluginSettings {
 
     StringSetting {
         settingKey: "baseUrl"
-        label: "URL de la instancia"
-        description: "Raíz de tu Wallabag autoalojado, sin barra final"
-        placeholder: "https://wallabag.midominio.org"
+        label: "Instance URL"
+        description: "Root of your self-hosted Wallabag, without trailing slash"
+        placeholder: "https://wallabag.example.org"
         defaultValue: ""
     }
 
     StringSetting {
         settingKey: "clientId"
-        label: "Client ID de la API"
-        description: "Créalo en tu Wallabag: menú → API clients management (/developer)"
+        label: "API client ID"
+        description: "Create it in your Wallabag: menu → API clients management (/developer)"
         placeholder: "1_xxxxxxxxxxxx"
         defaultValue: ""
     }
 
     StringSetting {
         settingKey: "username"
-        label: "Usuario"
-        description: "Tu usuario (o email) de Wallabag"
-        placeholder: "usuario"
+        label: "Username"
+        description: "Your Wallabag username (or email)"
+        placeholder: "user"
         defaultValue: ""
     }
 
     StyledText {
         width: parent.width
-        text: "Credenciales secretas"
+        text: "Secret credentials"
         font.pixelSize: Theme.fontSizeLarge
         font.weight: Font.Bold
         color: Theme.surfaceText
@@ -90,7 +90,7 @@ PluginSettings {
 
     StyledText {
         width: parent.width
-        text: "Se guardan en el llavero del sistema (secret-tool, servicio «dms-wallabag»), nunca en texto plano. Escribe el valor y pulsa Guardar."
+        text: "Stored in the system keyring (secret-tool, service “dms-wallabag”), never in plain text. Type the value and press Save."
         font.pixelSize: Theme.fontSizeSmall
         color: Theme.surfaceVariantText
         wrapMode: Text.WordWrap
@@ -102,7 +102,7 @@ PluginSettings {
         spacing: Theme.spacingXS
 
         StyledText {
-            text: "Client secret" + (root.clientSecretStored ? "   ✓ guardado en el llavero" : "")
+            text: "Client secret" + (root.clientSecretStored ? "   ✓ stored in keyring" : "")
             font.pixelSize: Theme.fontSizeMedium
             color: root.clientSecretStored ? Theme.primary : Theme.surfaceText
         }
@@ -116,7 +116,7 @@ PluginSettings {
                 width: parent.width - 100 - Theme.spacingS
                 height: 36
                 echoMode: TextInput.Password
-                placeholderText: "Client secret del cliente API"
+                placeholderText: "Client secret of the API client"
             }
 
             Rectangle {
@@ -128,7 +128,7 @@ PluginSettings {
 
                 StyledText {
                     anchors.centerIn: parent
-                    text: "Guardar"
+                    text: "Save"
                     font.pixelSize: Theme.fontSizeSmall
                     font.weight: Font.Medium
                     color: Theme.primary
@@ -150,13 +150,13 @@ PluginSettings {
         }
     }
 
-    // Contraseña
+    // Password
     Column {
         width: parent.width
         spacing: Theme.spacingXS
 
         StyledText {
-            text: "Contraseña de Wallabag" + (root.passwordStored ? "   ✓ guardada en el llavero" : "")
+            text: "Wallabag password" + (root.passwordStored ? "   ✓ stored in keyring" : "")
             font.pixelSize: Theme.fontSizeMedium
             color: root.passwordStored ? Theme.primary : Theme.surfaceText
         }
@@ -170,7 +170,7 @@ PluginSettings {
                 width: parent.width - 100 - Theme.spacingS
                 height: 36
                 echoMode: TextInput.Password
-                placeholderText: "Contraseña del usuario"
+                placeholderText: "Password of the user"
             }
 
             Rectangle {
@@ -182,7 +182,7 @@ PluginSettings {
 
                 StyledText {
                     anchors.centerIn: parent
-                    text: "Guardar"
+                    text: "Save"
                     font.pixelSize: Theme.fontSizeSmall
                     font.weight: Font.Medium
                     color: Theme.primary
@@ -206,7 +206,7 @@ PluginSettings {
 
     StyledText {
         width: parent.width
-        text: "Comportamiento"
+        text: "Behavior"
         font.pixelSize: Theme.fontSizeLarge
         font.weight: Font.Bold
         color: Theme.surfaceText
@@ -215,8 +215,8 @@ PluginSettings {
 
     SelectionSetting {
         settingKey: "pollInterval"
-        label: "Intervalo de sondeo"
-        description: "Cada cuánto se actualiza el contador de no leídas"
+        label: "Poll interval"
+        description: "How often the unread counter refreshes"
         options: [
             { label: "5 min", value: "300" },
             { label: "15 min", value: "900" },
@@ -228,7 +228,7 @@ PluginSettings {
 
     SelectionSetting {
         settingKey: "perPage"
-        label: "Entradas por página"
+        label: "Entries per page"
         options: [
             { label: "20", value: "20" },
             { label: "30", value: "30" },
@@ -239,15 +239,15 @@ PluginSettings {
 
     ToggleSetting {
         settingKey: "archiveOnOpen"
-        label: "Archivar al abrir"
-        description: "Marca la entrada como leída al abrirla en el navegador"
+        label: "Archive on open"
+        description: "Mark the entry as read when opening it in the browser"
         defaultValue: false
     }
 
     ToggleSetting {
         settingKey: "showThumbnails"
-        label: "Miniaturas"
-        description: "Muestra la imagen de vista previa de cada entrada"
+        label: "Thumbnails"
+        description: "Show each entry's preview picture"
         defaultValue: true
     }
 }
