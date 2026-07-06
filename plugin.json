@@ -1,6 +1,6 @@
 {
     "id": "wallabag",
-    "name": "DMS-Wallabag",
+    "name": "Wallabag",
     "description": "Read-it-later Wallabag entries in the DankBar: unread badge, entry list with source and excerpt, open links without closing the popout, archive/star/delete/tag actions, search and quick-add",
     "version": "0.1.0",
     "author": "arqueon",
