@@ -1,0 +1,1313 @@
+// WallabagWidget.qml — widget de barra DMS para Wallabag
+//
+// Píldora con el logo de wallabag + contador de no leídas; popout con la lista
+// de entradas (procedencia, extracto, enlace que no cierra la ventana) y
+// acciones por fila: archivar/leído, favorito, borrar, recargar, copiar URL.
+// API: OAuth2 password grant + refresh contra la instancia configurada.
+
+import QtQuick
+import Quickshell
+import qs.Common
+import qs.Widgets
+import qs.Services
+import qs.Modules.Plugins
+import "./JS/wallabag.js" as WB
+
+PluginComponent {
+    id: root
+
+    property var popoutService: null
+
+    // ── Ajustes (pluginData es reactivo) ──────────────────────────────────
+    property string baseUrl: String(pluginData.baseUrl || "").trim().replace(/\/+$/, "")
+    property string clientId: String(pluginData.clientId || "").trim()
+    property string username: String(pluginData.username || "").trim()
+    property int pollIntervalMs: (parseInt(pluginData.pollInterval) || 900) * 1000
+    property int perPage: parseInt(pluginData.perPage) || 30
+    property bool archiveOnOpen: pluginData.archiveOnOpen === true
+    property bool showThumbnails: pluginData.showThumbnails !== false
+    property string secretsStamp: String(pluginData.secretsStamp || "")
+
+    // ── Secretos (llavero del sistema vía secret-tool) ────────────────────
+    property string clientSecret: ""
+    property string password: ""
+    property bool secretsLoaded: false
+
+    readonly property bool configured: baseUrl !== "" && clientId !== ""
+                                       && username !== "" && clientSecret !== ""
+                                       && password !== ""
+
+    // ── OAuth ─────────────────────────────────────────────────────────────
+    property string accessToken: ""
+    property string refreshToken: ""
+    property double tokenExpiresAt: 0
+
+    // ── Datos ─────────────────────────────────────────────────────────────
+    property var entries: []
+    property int unreadTotal: 0
+    property string filter: String(pluginData.filter || "unread")
+    property string searchTerm: ""
+    property string pendingSearch: ""
+    property int page: 1
+    property int pages: 1
+    property int totalCount: 0
+    property bool isLoading: false
+    property string errorMessage: ""
+    property int expandedId: -1
+    property var contentCache: ({})
+    property int pendingDeleteId: -1
+    property double lastUpdated: 0
+    property int _reqSeq: 0
+
+    readonly property var filterOptions: [
+        { label: "No leídas", value: "unread" },
+        { label: "Favoritas", value: "starred" },
+        { label: "Archivo", value: "archive" },
+        { label: "Todas", value: "all" }
+    ]
+
+    readonly property string headerDetails: {
+        if (!secretsLoaded)
+            return "Leyendo credenciales del llavero…"
+        if (!configured)
+            return "Configura la conexión en Ajustes → Plugins → Wallabag"
+        if (errorMessage !== "")
+            return errorMessage
+        if (isLoading && entries.length === 0)
+            return "Cargando entradas…"
+        var detail = unreadTotal + " sin leer"
+        if (searchTerm !== "")
+            detail += " · búsqueda: " + totalCount + " resultados"
+        else if (filter !== "unread")
+            detail += " · " + totalCount + " en esta vista"
+        return detail
+    }
+
+    // ── Secretos ──────────────────────────────────────────────────────────
+
+    function _lookupSecret(key, cb) {
+        Proc.runCommand("wallabag.lookup." + key + "." + (++_reqSeq),
+                        ["secret-tool", "lookup", "service", "dms-wallabag", "key", key],
+                        (stdout, exitCode) => {
+                            cb(exitCode === 0 ? String(stdout).trim() : "")
+                        })
+    }
+
+    function loadSecrets(then) {
+        _lookupSecret("client_secret", s => {
+            clientSecret = s
+            _lookupSecret("password", p => {
+                password = p
+                secretsLoaded = true
+                if (then)
+                    then()
+            })
+        })
+    }
+
+    // ── OAuth ─────────────────────────────────────────────────────────────
+
+    function _tokenRequest(fields, cb) {
+        var argv = ["curl", "-sS", "--max-time", "20", "-w", "\n%{http_code}",
+                    "-X", "POST", baseUrl + "/oauth/v2/token"]
+        for (var key in fields) {
+            argv.push("--data-urlencode")
+            argv.push(key + "=" + fields[key])
+        }
+        Proc.runCommand("wallabag.token." + (++_reqSeq), argv, (stdout, exitCode) => {
+            var res = WB.parseCurl(stdout, exitCode)
+            if (res.status === 200 && res.json && res.json.access_token) {
+                accessToken = res.json.access_token
+                refreshToken = res.json.refresh_token || ""
+                var lifetime = Math.max(60, (res.json.expires_in || 3600) - 60)
+                tokenExpiresAt = Date.now() + lifetime * 1000
+                cb(true)
+            } else {
+                cb(false, WB.errorText(res))
+            }
+        })
+    }
+
+    function ensureToken(cb) {
+        if (accessToken !== "" && Date.now() < tokenExpiresAt) {
+            cb(true)
+            return
+        }
+        var passwordGrant = () => _tokenRequest({
+            grant_type: "password",
+            client_id: clientId,
+            client_secret: clientSecret,
+            username: username,
+            password: password
+        }, cb)
+        if (refreshToken !== "") {
+            _tokenRequest({
+                grant_type: "refresh_token",
+                refresh_token: refreshToken,
+                client_id: clientId,
+                client_secret: clientSecret
+            }, ok => ok ? cb(true) : passwordGrant())
+        } else {
+            passwordGrant()
+        }
+    }
+
+    // ── Cliente HTTP (curl vía Proc) ──────────────────────────────────────
+
+    function apiCall(method, path, query, form, cb) {
+        if (!configured) {
+            cb({ status: 0, json: null, error: "sin configurar" })
+            return
+        }
+        var attempt = retriesLeft => {
+            ensureToken((ok, err) => {
+                if (!ok) {
+                    cb({ status: 401, json: null, error: err || "autenticación fallida" })
+                    return
+                }
+                var url = baseUrl + path
+                var queryStr = query ? WB.buildQuery(query) : ""
+                if (queryStr !== "")
+                    url += "?" + queryStr
+                var argv = ["curl", "-sS", "--max-time", "30", "-w", "\n%{http_code}",
+                            "-X", method, "-H", "Authorization: Bearer " + accessToken, url]
+                if (form) {
+                    for (var key in form) {
+                        argv.push("--data-urlencode")
+                        argv.push(key + "=" + form[key])
+                    }
+                }
+                Proc.runCommand("wallabag.api." + (++_reqSeq), argv, (stdout, exitCode) => {
+                    var res = WB.parseCurl(stdout, exitCode)
+                    if (res.status === 401 && retriesLeft > 0) {
+                        accessToken = ""
+                        attempt(retriesLeft - 1)
+                        return
+                    }
+                    cb(res)
+                })
+            })
+        }
+        attempt(1)
+    }
+
+    // ── Lectura de entradas ───────────────────────────────────────────────
+
+    function matchesFilter(entry) {
+        if (searchTerm !== "")
+            return true
+        if (filter === "unread") return !entry.isArchived
+        if (filter === "starred") return entry.isStarred
+        if (filter === "archive") return entry.isArchived
+        return true
+    }
+
+    function fetchEntries(reset) {
+        if (!configured)
+            return
+        if (reset)
+            page = 1
+        isLoading = true
+        var requestedPage = page
+        var done = res => {
+            isLoading = false
+            if (res.status !== 200 || !res.json) {
+                errorMessage = "Error: " + WB.errorText(res)
+                return
+            }
+            errorMessage = ""
+            var items = (res.json._embedded && res.json._embedded.items) || []
+            var mapped = WB.mapEntries(items)
+            entries = requestedPage === 1 ? mapped : entries.concat(mapped)
+            pages = res.json.pages || 1
+            totalCount = res.json.total !== undefined ? res.json.total : mapped.length
+            lastUpdated = Date.now()
+            _pruneSelection()
+            if (searchTerm === "" && filter === "unread") {
+                unreadTotal = totalCount
+                pluginService?.savePluginState(pluginId, "unreadTotal", unreadTotal)
+            }
+        }
+        if (searchTerm !== "") {
+            apiCall("GET", "/api/search.json",
+                    { term: searchTerm, page: requestedPage, perPage: perPage }, null, done)
+        } else {
+            var query = { page: requestedPage, perPage: perPage, detail: "metadata",
+                          sort: "created", order: "desc" }
+            if (filter === "unread") query.archive = 0
+            else if (filter === "starred") query.starred = 1
+            else if (filter === "archive") query.archive = 1
+            apiCall("GET", "/api/entries.json", query, null, done)
+        }
+    }
+
+    function loadMore() {
+        if (isLoading || page >= pages)
+            return
+        page += 1
+        fetchEntries(false)
+    }
+
+    function refreshUnread() {
+        if (!configured)
+            return
+        apiCall("GET", "/api/entries.json",
+                { archive: 0, perPage: 1, detail: "metadata" }, null, res => {
+            if (res.status === 200 && res.json && res.json.total !== undefined) {
+                unreadTotal = res.json.total
+                errorMessage = ""
+                pluginService?.savePluginState(pluginId, "unreadTotal", unreadTotal)
+            } else if (entries.length === 0) {
+                errorMessage = "Error: " + WB.errorText(res)
+            }
+        })
+    }
+
+    function refreshAll() {
+        refreshUnread()
+        fetchEntries(true)
+    }
+
+    function setFilter(value) {
+        if (filter === value)
+            return
+        filter = value
+        pluginService?.savePluginData(pluginId, "filter", value)
+        expandedId = -1
+        fetchEntries(true)
+    }
+
+    function setSearchTerm(term) {
+        var trimmed = String(term || "").trim()
+        if (searchTerm === trimmed)
+            return
+        searchTerm = trimmed
+        expandedId = -1
+        fetchEntries(true)
+    }
+
+    // ── Acciones sobre entradas ───────────────────────────────────────────
+
+    function _replaceEntry(id, mapped, keep) {
+        var next = []
+        for (var i = 0; i < entries.length; i++) {
+            if (entries[i].id === id) {
+                if (keep)
+                    next.push(mapped)
+            } else {
+                next.push(entries[i])
+            }
+        }
+        entries = next
+        if (!keep) {
+            totalCount = Math.max(0, totalCount - 1)
+            if (expandedId === id)
+                expandedId = -1
+        }
+    }
+
+    function _applyServerEntry(json) {
+        if (!json || json.id === undefined)
+            return
+        var mapped = WB.mapEntry(json)
+        _replaceEntry(mapped.id, mapped, matchesFilter(mapped))
+    }
+
+    function _patchEntry(entry, form, localPatch) {
+        var previous = entries
+        entries = entries.map(e => e.id === entry.id ? Object.assign({}, e, localPatch) : e)
+        apiCall("PATCH", "/api/entries/" + entry.id + ".json", null, form, res => {
+            if (res.status === 200 && res.json) {
+                _applyServerEntry(res.json)
+            } else {
+                entries = previous
+                ToastService?.showError("Wallabag: " + WB.errorText(res))
+            }
+        })
+    }
+
+    function toggleStar(entry) {
+        _patchEntry(entry, { starred: entry.isStarred ? 0 : 1 },
+                    { isStarred: !entry.isStarred })
+    }
+
+    function toggleArchive(entry) {
+        var willArchive = !entry.isArchived
+        unreadTotal = Math.max(0, unreadTotal + (willArchive ? -1 : 1))
+        pluginService?.savePluginState(pluginId, "unreadTotal", unreadTotal)
+        _patchEntry(entry, { archive: willArchive ? 1 : 0 },
+                    { isArchived: willArchive })
+    }
+
+    function requestDelete(entry) {
+        if (pendingDeleteId !== entry.id) {
+            pendingDeleteId = entry.id
+            deleteConfirmTimer.restart()
+            return
+        }
+        deleteConfirmTimer.stop()
+        pendingDeleteId = -1
+        apiCall("DELETE", "/api/entries/" + entry.id + ".json",
+                { expect: "id" }, null, res => {
+            if (res.status === 200) {
+                if (!entry.isArchived) {
+                    unreadTotal = Math.max(0, unreadTotal - 1)
+                    pluginService?.savePluginState(pluginId, "unreadTotal", unreadTotal)
+                }
+                _replaceEntry(entry.id, null, false)
+            } else {
+                ToastService?.showError("Wallabag: no se pudo borrar — " + WB.errorText(res))
+            }
+        })
+    }
+
+    function reloadEntry(entry) {
+        apiCall("PATCH", "/api/entries/" + entry.id + "/reload.json", null, null, res => {
+            if (res.status === 200 && res.json) {
+                _applyServerEntry(res.json)
+                var cache = Object.assign({}, contentCache)
+                delete cache[entry.id]
+                contentCache = cache
+                if (expandedId === entry.id)
+                    fetchExcerpt(entry.id)
+                ToastService?.showInfo("Contenido recargado")
+            } else if (res.status === 304) {
+                ToastService?.showInfo("Wallabag no pudo recargar el contenido")
+            } else {
+                ToastService?.showError("Wallabag: " + WB.errorText(res))
+            }
+        })
+    }
+
+    function openEntry(entry) {
+        if (!entry.url)
+            return
+        Quickshell.execDetached(["xdg-open", entry.url])
+        if (archiveOnOpen && !entry.isArchived)
+            toggleArchive(entry)
+    }
+
+    function copyUrl(entry) {
+        Quickshell.execDetached(["dms", "cl", "copy", entry.url])
+        ToastService?.showInfo("URL copiada")
+    }
+
+    function addUrl(url) {
+        var trimmed = String(url || "").trim()
+        if (trimmed === "")
+            return
+        apiCall("POST", "/api/entries.json", null, { url: trimmed }, res => {
+            if (res.status === 200) {
+                ToastService?.showInfo("Guardado en Wallabag")
+                refreshAll()
+            } else {
+                ToastService?.showError("Wallabag: no se pudo guardar — " + WB.errorText(res))
+            }
+        })
+    }
+
+    // ── Selección múltiple y operaciones por lote ─────────────────────────
+
+    property var selectedIds: ({})
+    readonly property int selectedCount: Object.keys(selectedIds).length
+    property bool batchDeleteArmed: false
+
+    // Cola secuencial: los lotes disparan una petición a la vez
+    property var _opQueue: []
+    property bool _opRunning: false
+
+    function _enqueueOps(fns) {
+        _opQueue = _opQueue.concat(fns)
+        _pumpOps()
+    }
+
+    function _pumpOps() {
+        if (_opRunning || _opQueue.length === 0)
+            return
+        _opRunning = true
+        var fn = _opQueue[0]
+        _opQueue = _opQueue.slice(1)
+        fn(() => {
+            _opRunning = false
+            _pumpOps()
+        })
+    }
+
+    function isSelected(id) {
+        return selectedIds[id] === true
+    }
+
+    function toggleSelect(id) {
+        var next = Object.assign({}, selectedIds)
+        if (next[id])
+            delete next[id]
+        else
+            next[id] = true
+        selectedIds = next
+        if (selectedCount === 0)
+            batchDeleteArmed = false
+    }
+
+    function selectAllVisible() {
+        var next = {}
+        for (var i = 0; i < entries.length; i++)
+            next[entries[i].id] = true
+        selectedIds = next
+    }
+
+    function clearSelection() {
+        selectedIds = ({})
+        batchDeleteArmed = false
+    }
+
+    function _pruneSelection() {
+        var next = {}
+        for (var i = 0; i < entries.length; i++) {
+            if (selectedIds[entries[i].id])
+                next[entries[i].id] = true
+        }
+        if (Object.keys(next).length !== selectedCount)
+            selectedIds = next
+    }
+
+    function _selectedEntries() {
+        return entries.filter(e => selectedIds[e.id] === true)
+    }
+
+    function _finishBatch() {
+        clearSelection()
+        refreshUnread()
+    }
+
+    function batchOpen() {
+        var targets = _selectedEntries()
+        for (var i = 0; i < targets.length; i++)
+            openEntry(targets[i])
+    }
+
+    function batchArchive() {
+        var toArchive = filter !== "archive"
+        var targets = _selectedEntries().filter(e => e.isArchived !== toArchive)
+        if (targets.length === 0) {
+            _finishBatch()
+            return
+        }
+        _enqueueOps(targets.map(e => done => {
+            apiCall("PATCH", "/api/entries/" + e.id + ".json", null,
+                    { archive: toArchive ? 1 : 0 }, res => {
+                if (res.status === 200 && res.json)
+                    _applyServerEntry(res.json)
+                done()
+            })
+        }).concat([done => {
+            _finishBatch()
+            done()
+        }]))
+    }
+
+    function batchStar() {
+        var selected = _selectedEntries()
+        if (selected.length === 0)
+            return
+        // si todas ya son favoritas → quitar; si no → marcar todas
+        var makeStarred = !selected.every(e => e.isStarred)
+        var targets = selected.filter(e => e.isStarred !== makeStarred)
+        if (targets.length === 0) {
+            _finishBatch()
+            return
+        }
+        _enqueueOps(targets.map(e => done => {
+            apiCall("PATCH", "/api/entries/" + e.id + ".json", null,
+                    { starred: makeStarred ? 1 : 0 }, res => {
+                if (res.status === 200 && res.json)
+                    _applyServerEntry(res.json)
+                done()
+            })
+        }).concat([done => {
+            _finishBatch()
+            done()
+        }]))
+    }
+
+    function batchDelete() {
+        if (!batchDeleteArmed) {
+            batchDeleteArmed = true
+            batchDeleteTimer.restart()
+            return
+        }
+        batchDeleteTimer.stop()
+        batchDeleteArmed = false
+        var targets = _selectedEntries()
+        _enqueueOps(targets.map(e => done => {
+            apiCall("DELETE", "/api/entries/" + e.id + ".json",
+                    { expect: "id" }, null, res => {
+                if (res.status === 200)
+                    _replaceEntry(e.id, null, false)
+                else
+                    ToastService?.showError("Wallabag: no se pudo borrar «" + e.title + "»")
+                done()
+            })
+        }).concat([done => {
+            _finishBatch()
+            done()
+        }]))
+    }
+
+    // ── Extracto de contenido (bajo demanda, cacheado) ────────────────────
+
+    function toggleExpand(entry) {
+        if (expandedId === entry.id) {
+            expandedId = -1
+            return
+        }
+        expandedId = entry.id
+        if (contentCache[entry.id] === undefined)
+            fetchExcerpt(entry.id)
+    }
+
+    function fetchExcerpt(id) {
+        apiCall("GET", "/api/entries/" + id + ".json", null, null, res => {
+            var cache = Object.assign({}, contentCache)
+            if (res.status === 200 && res.json) {
+                var text = WB.excerpt(res.json.content, 480)
+                cache[id] = text !== "" ? text : "(sin contenido extraído)"
+            } else {
+                cache[id] = "(no se pudo cargar el extracto)"
+            }
+            contentCache = cache
+        })
+    }
+
+    // ── Temporizadores y arranque ─────────────────────────────────────────
+
+    Timer {
+        id: pollTimer
+        interval: root.pollIntervalMs
+        running: root.configured
+        repeat: true
+        onTriggered: root.refreshUnread()
+    }
+
+    Timer {
+        id: deleteConfirmTimer
+        interval: 3500
+        onTriggered: root.pendingDeleteId = -1
+    }
+
+    Timer {
+        id: batchDeleteTimer
+        interval: 3500
+        onTriggered: root.batchDeleteArmed = false
+    }
+
+    Timer {
+        id: searchDebounce
+        interval: 450
+        onTriggered: root.setSearchTerm(root.pendingSearch)
+    }
+
+    Component.onCompleted: {
+        if (pluginService)
+            unreadTotal = pluginService.loadPluginState(pluginId, "unreadTotal", 0)
+        loadSecrets(() => {
+            if (configured)
+                refreshAll()
+        })
+    }
+
+    onSecretsStampChanged: {
+        if (!secretsLoaded)
+            return
+        loadSecrets(() => {
+            accessToken = ""
+            refreshToken = ""
+            if (configured)
+                refreshAll()
+        })
+    }
+
+    // ── Píldoras de la barra ──────────────────────────────────────────────
+
+    horizontalBarPill: Component {
+        Item {
+            implicitWidth: pillRow.implicitWidth
+            implicitHeight: pillRow.implicitHeight
+
+            Row {
+                id: pillRow
+                spacing: Theme.spacingXS
+
+                WallabagIcon {
+                    size: Math.max(15, root.iconSize - 2)
+                    iconColor: root.configured ? Theme.surfaceText : Theme.surfaceVariantText
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+
+                StyledText {
+                    visible: root.unreadTotal > 0
+                    text: WB.formatCount(root.unreadTotal)
+                    font.pixelSize: Theme.fontSizeSmall
+                    font.weight: Font.Medium
+                    color: Theme.surfaceText
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+            }
+        }
+    }
+
+    verticalBarPill: Component {
+        Item {
+            implicitWidth: pillColumn.implicitWidth
+            implicitHeight: pillColumn.implicitHeight
+
+            Column {
+                id: pillColumn
+                spacing: Theme.spacingXS
+
+                WallabagIcon {
+                    size: Math.max(15, root.iconSize - 2)
+                    iconColor: root.configured ? Theme.surfaceText : Theme.surfaceVariantText
+                    anchors.horizontalCenter: parent.horizontalCenter
+                }
+
+                StyledText {
+                    visible: root.unreadTotal > 0
+                    text: WB.formatCount(root.unreadTotal)
+                    font.pixelSize: Theme.fontSizeSmall
+                    font.weight: Font.Medium
+                    color: Theme.surfaceText
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    horizontalAlignment: Text.AlignHCenter
+                }
+            }
+        }
+    }
+
+    pillRightClickAction: () => root.refreshAll()
+
+    // ── Popout ────────────────────────────────────────────────────────────
+
+    popoutWidth: 480
+    popoutHeight: 600
+
+    popoutContent: Component {
+        PopoutComponent {
+            id: popout
+
+            headerText: "Wallabag"
+            detailsText: root.headerDetails
+            showCloseButton: true
+
+            property bool addMode: false
+
+            Component.onCompleted: {
+                if (root.configured && Date.now() - root.lastUpdated > 60000)
+                    root.fetchEntries(true)
+            }
+
+            Component.onDestruction: root.clearSelection()
+
+            // Barra de herramientas: filtros + refrescar + añadir
+            Item {
+                id: toolbar
+                width: parent.width
+                height: 30
+
+                Rectangle {
+                    id: filterControl
+                    anchors.left: parent.left
+                    anchors.leftMargin: Theme.spacingS
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: filterRow.implicitWidth + 2
+                    height: 26
+                    radius: Theme.cornerRadius
+                    color: Theme.surfaceContainerHigh
+
+                    Row {
+                        id: filterRow
+                        anchors.centerIn: parent
+                        spacing: 1
+
+                        Repeater {
+                            model: root.filterOptions
+
+                            delegate: Rectangle {
+                                required property var modelData
+                                width: segmentLabel.implicitWidth + Theme.spacingM
+                                height: 24
+                                radius: Theme.cornerRadius
+                                color: root.filter === modelData.value && root.searchTerm === ""
+                                       ? Theme.withAlpha(Theme.primary, 0.25)
+                                       : "transparent"
+
+                                StyledText {
+                                    id: segmentLabel
+                                    anchors.centerIn: parent
+                                    text: parent.modelData.label
+                                    font.pixelSize: Theme.fontSizeSmall
+                                    font.weight: root.filter === parent.modelData.value ? Font.DemiBold : Font.Normal
+                                    color: root.filter === parent.modelData.value && root.searchTerm === ""
+                                           ? Theme.primary : Theme.surfaceVariantText
+                                }
+
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: root.setFilter(parent.modelData.value)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Row {
+                    anchors.right: parent.right
+                    anchors.rightMargin: Theme.spacingS
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: Theme.spacingXS
+
+                    DankActionButton {
+                        iconName: "add"
+                        buttonSize: 28
+                        iconColor: popout.addMode ? Theme.primary : Theme.surfaceVariantText
+                        onClicked: popout.addMode = !popout.addMode
+                    }
+
+                    DankActionButton {
+                        iconName: "refresh"
+                        buttonSize: 28
+                        iconColor: root.isLoading ? Theme.primary : Theme.surfaceVariantText
+                        onClicked: root.refreshAll()
+                    }
+                }
+            }
+
+            // Fila para añadir una URL nueva
+            Item {
+                id: addRow
+                width: parent.width
+                height: popout.addMode ? 36 : 0
+                visible: popout.addMode
+                clip: true
+
+                DankTextField {
+                    id: addField
+                    anchors.left: parent.left
+                    anchors.leftMargin: Theme.spacingS
+                    anchors.right: addButton.left
+                    anchors.rightMargin: Theme.spacingXS
+                    anchors.verticalCenter: parent.verticalCenter
+                    height: 32
+                    placeholderText: "https://… (guardar en Wallabag)"
+                    onAccepted: {
+                        root.addUrl(text)
+                        text = ""
+                        popout.addMode = false
+                    }
+                }
+
+                Rectangle {
+                    id: addButton
+                    anchors.right: parent.right
+                    anchors.rightMargin: Theme.spacingS
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: saveLabel.implicitWidth + Theme.spacingM * 2
+                    height: 30
+                    radius: Theme.cornerRadius
+                    color: saveArea.containsMouse ? Theme.withAlpha(Theme.primary, 0.35)
+                                                  : Theme.withAlpha(Theme.primary, 0.22)
+
+                    StyledText {
+                        id: saveLabel
+                        anchors.centerIn: parent
+                        text: "Guardar"
+                        font.pixelSize: Theme.fontSizeSmall
+                        font.weight: Font.Medium
+                        color: Theme.primary
+                    }
+
+                    MouseArea {
+                        id: saveArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            root.addUrl(addField.text)
+                            addField.text = ""
+                            popout.addMode = false
+                        }
+                    }
+                }
+            }
+
+            // Búsqueda
+            Item {
+                id: searchRow
+                width: parent.width
+                height: 36
+
+                DankTextField {
+                    id: searchField
+                    anchors.left: parent.left
+                    anchors.leftMargin: Theme.spacingS
+                    anchors.right: clearSearch.visible ? clearSearch.left : parent.right
+                    anchors.rightMargin: Theme.spacingS
+                    anchors.verticalCenter: parent.verticalCenter
+                    height: 32
+                    placeholderText: "Buscar en Wallabag…"
+                    text: root.searchTerm
+                    onTextEdited: {
+                        root.pendingSearch = text
+                        searchDebounce.restart()
+                    }
+                    onAccepted: {
+                        searchDebounce.stop()
+                        root.setSearchTerm(text)
+                    }
+                }
+
+                DankActionButton {
+                    id: clearSearch
+                    visible: searchField.text !== ""
+                    anchors.right: parent.right
+                    anchors.rightMargin: Theme.spacingS
+                    anchors.verticalCenter: parent.verticalCenter
+                    iconName: "close"
+                    buttonSize: 28
+                    iconColor: Theme.surfaceVariantText
+                    onClicked: {
+                        searchField.text = ""
+                        searchDebounce.stop()
+                        root.setSearchTerm("")
+                    }
+                }
+            }
+
+            // Barra de selección múltiple (visible cuando hay filas marcadas)
+            Item {
+                id: selectionRow
+                width: parent.width
+                height: root.selectedCount > 0 ? 34 : 0
+                visible: root.selectedCount > 0
+                clip: true
+
+                Rectangle {
+                    anchors.fill: parent
+                    anchors.leftMargin: Theme.spacingS
+                    anchors.rightMargin: Theme.spacingS
+                    radius: Theme.cornerRadius
+                    color: Theme.withAlpha(Theme.primary, 0.12)
+
+                    Row {
+                        anchors.left: parent.left
+                        anchors.leftMargin: Theme.spacingS
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: Theme.spacingXS
+
+                        StyledText {
+                            text: root.selectedCount + " sel."
+                            font.pixelSize: Theme.fontSizeSmall
+                            font.weight: Font.DemiBold
+                            color: Theme.primary
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+
+                        DankActionButton {
+                            iconName: "select_all"
+                            buttonSize: 26
+                            iconColor: Theme.surfaceVariantText
+                            tooltipText: "Seleccionar todas"
+                            onClicked: root.selectAllVisible()
+                        }
+
+                        DankActionButton {
+                            iconName: "close"
+                            buttonSize: 26
+                            iconColor: Theme.surfaceVariantText
+                            tooltipText: "Limpiar selección"
+                            onClicked: root.clearSelection()
+                        }
+                    }
+
+                    Row {
+                        anchors.right: parent.right
+                        anchors.rightMargin: Theme.spacingXS
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: 0
+
+                        DankActionButton {
+                            iconName: "open_in_new"
+                            buttonSize: 26
+                            iconColor: Theme.surfaceVariantText
+                            tooltipText: "Abrir todas en el navegador"
+                            onClicked: root.batchOpen()
+                        }
+
+                        DankActionButton {
+                            iconName: root.filter === "archive" ? "unarchive" : "check_circle"
+                            buttonSize: 26
+                            iconColor: Theme.surfaceVariantText
+                            tooltipText: root.filter === "archive" ? "Desarchivar seleccionadas" : "Archivar (leídas) seleccionadas"
+                            onClicked: root.batchArchive()
+                        }
+
+                        DankActionButton {
+                            iconName: "star"
+                            buttonSize: 26
+                            iconColor: Theme.surfaceVariantText
+                            tooltipText: "Favorito sí/no (todas)"
+                            onClicked: root.batchStar()
+                        }
+
+                        DankActionButton {
+                            iconName: root.batchDeleteArmed ? "delete_forever" : "delete"
+                            buttonSize: 26
+                            iconColor: root.batchDeleteArmed ? Theme.error : Theme.surfaceVariantText
+                            tooltipText: root.batchDeleteArmed
+                                         ? "Pulsa otra vez: borrar " + root.selectedCount + " entradas"
+                                         : "Borrar seleccionadas"
+                            onClicked: root.batchDelete()
+                        }
+                    }
+                }
+            }
+
+            // Lista de entradas
+            Item {
+                id: listContainer
+                width: parent.width
+                height: Math.max(120, root.popoutHeight - popout.headerHeight - popout.detailsHeight
+                                 - toolbar.height - addRow.height - searchRow.height
+                                 - selectionRow.height - Theme.spacingL * 3)
+
+                DankListView {
+                    id: entryList
+                    anchors.fill: parent
+                    clip: true
+                    spacing: Theme.spacingXS
+                    model: root.entries
+
+                delegate: Rectangle {
+                    id: entryRow
+
+                    required property var modelData
+                    required property int index
+
+                    readonly property bool expanded: root.expandedId === modelData.id
+
+                    width: entryList.width
+                    height: rowContent.implicitHeight + Theme.spacingS * 2
+                    radius: Theme.cornerRadius
+                    color: rowHover.hovered ? Theme.surfaceContainerHighest : Theme.surfaceContainerHigh
+
+                    HoverHandler { id: rowHover }
+
+                    MouseArea {
+                        anchors.fill: parent
+                        acceptedButtons: Qt.LeftButton | Qt.MiddleButton
+                        onClicked: mouse => {
+                            if (mouse.button === Qt.MiddleButton)
+                                root.openEntry(entryRow.modelData)
+                            else if (root.selectedCount > 0)
+                                root.toggleSelect(entryRow.modelData.id)
+                            else
+                                root.toggleExpand(entryRow.modelData)
+                        }
+                    }
+
+                    Column {
+                        id: rowContent
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.margins: Theme.spacingS
+                        spacing: Theme.spacingXS
+
+                        Row {
+                            width: parent.width
+                            spacing: Theme.spacingS
+
+                            Item {
+                                id: checkBox
+                                width: 20
+                                height: 44
+                                anchors.verticalCenter: parent.verticalCenter
+
+                                DankIcon {
+                                    anchors.centerIn: parent
+                                    name: root.isSelected(entryRow.modelData.id)
+                                          ? "check_box" : "check_box_outline_blank"
+                                    size: 18
+                                    color: root.isSelected(entryRow.modelData.id)
+                                           ? Theme.primary : Theme.surfaceVariantText
+                                }
+
+                                MouseArea {
+                                    anchors.fill: parent
+                                    anchors.margins: -4
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: root.toggleSelect(entryRow.modelData.id)
+                                }
+                            }
+
+                            Rectangle {
+                                id: thumb
+                                visible: root.showThumbnails && entryRow.modelData.previewPicture !== ""
+                                width: visible ? 44 : 0
+                                height: 44
+                                radius: Theme.cornerRadius / 2
+                                color: Theme.surfaceContainerHighest
+                                clip: true
+                                anchors.verticalCenter: parent.verticalCenter
+
+                                CachingImage {
+                                    anchors.fill: parent
+                                    imagePath: entryRow.modelData.previewPicture
+                                }
+                            }
+
+                            Column {
+                                width: parent.width - checkBox.width - Theme.spacingS
+                                       - (thumb.visible ? thumb.width + Theme.spacingS : 0)
+                                       - actionsColumn.width - Theme.spacingS
+                                spacing: 2
+                                anchors.verticalCenter: parent.verticalCenter
+
+                                StyledText {
+                                    id: titleText
+                                    width: parent.width
+                                    text: entryRow.modelData.title
+                                    font.pixelSize: Theme.fontSizeMedium
+                                    font.weight: Font.Medium
+                                    font.underline: titleArea.containsMouse
+                                    color: titleArea.containsMouse ? Theme.primary : Theme.surfaceText
+                                    wrapMode: Text.WordWrap
+                                    maximumLineCount: 2
+                                    elide: Text.ElideRight
+
+                                    MouseArea {
+                                        id: titleArea
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        // Abre en el navegador SIN cerrar el popout
+                                        onClicked: root.openEntry(entryRow.modelData)
+                                    }
+                                }
+
+                                StyledText {
+                                    width: parent.width
+                                    text: {
+                                        var parts = []
+                                        if (entryRow.modelData.domain !== "")
+                                            parts.push(entryRow.modelData.domain)
+                                        if (entryRow.modelData.readingTime > 0)
+                                            parts.push(entryRow.modelData.readingTime + " min")
+                                        var when = WB.relativeTime(entryRow.modelData.createdAt)
+                                        if (when !== "")
+                                            parts.push(when)
+                                        return parts.join(" · ")
+                                    }
+                                    font.pixelSize: Theme.fontSizeSmall
+                                    color: Theme.surfaceVariantText
+                                    elide: Text.ElideRight
+                                    maximumLineCount: 1
+                                }
+                            }
+
+                            Column {
+                                id: actionsColumn
+                                width: actionButtons.implicitWidth
+                                anchors.verticalCenter: parent.verticalCenter
+
+                                Row {
+                                    id: actionButtons
+                                    spacing: 0
+
+                                    DankActionButton {
+                                        iconName: "star"
+                                        buttonSize: 28
+                                        iconColor: entryRow.modelData.isStarred ? Theme.primary : Theme.surfaceVariantText
+                                        onClicked: root.toggleStar(entryRow.modelData)
+                                    }
+
+                                    DankActionButton {
+                                        iconName: entryRow.modelData.isArchived ? "unarchive" : "check_circle"
+                                        buttonSize: 28
+                                        iconColor: entryRow.modelData.isArchived ? Theme.primary : Theme.surfaceVariantText
+                                        onClicked: root.toggleArchive(entryRow.modelData)
+                                    }
+
+                                    DankActionButton {
+                                        iconName: "open_in_new"
+                                        buttonSize: 28
+                                        iconColor: Theme.surfaceVariantText
+                                        onClicked: root.openEntry(entryRow.modelData)
+                                    }
+                                }
+                            }
+                        }
+
+                        // Detalle expandido: extracto + etiquetas + acciones secundarias
+                        Column {
+                            width: parent.width
+                            visible: entryRow.expanded
+                            spacing: Theme.spacingXS
+
+                            StyledText {
+                                width: parent.width
+                                text: root.contentCache[entryRow.modelData.id] !== undefined
+                                      ? root.contentCache[entryRow.modelData.id]
+                                      : "Cargando extracto…"
+                                font.pixelSize: Theme.fontSizeSmall
+                                color: Theme.surfaceText
+                                opacity: 0.9
+                                wrapMode: Text.WordWrap
+                                maximumLineCount: 9
+                                elide: Text.ElideRight
+                            }
+
+                            StyledText {
+                                visible: entryRow.modelData.originUrl !== ""
+                                width: parent.width
+                                text: "Origen: " + entryRow.modelData.originUrl
+                                font.pixelSize: Theme.fontSizeSmall
+                                color: Theme.surfaceVariantText
+                                elide: Text.ElideRight
+                                maximumLineCount: 1
+                            }
+
+                            Flow {
+                                width: parent.width
+                                spacing: Theme.spacingXS
+                                visible: entryRow.modelData.tags.length > 0
+
+                                Repeater {
+                                    model: entryRow.modelData.tags
+
+                                    delegate: Rectangle {
+                                        required property string modelData
+                                        width: tagLabel.implicitWidth + Theme.spacingS * 2
+                                        height: 20
+                                        radius: 10
+                                        color: Theme.withAlpha(Theme.primary, 0.15)
+
+                                        StyledText {
+                                            id: tagLabel
+                                            anchors.centerIn: parent
+                                            text: parent.modelData
+                                            font.pixelSize: Theme.fontSizeSmall
+                                            color: Theme.primary
+                                        }
+                                    }
+                                }
+                            }
+
+                            Row {
+                                spacing: Theme.spacingXS
+
+                                DankActionButton {
+                                    iconName: "content_copy"
+                                    buttonSize: 26
+                                    iconColor: Theme.surfaceVariantText
+                                    onClicked: root.copyUrl(entryRow.modelData)
+                                }
+
+                                DankActionButton {
+                                    iconName: "sync"
+                                    buttonSize: 26
+                                    iconColor: Theme.surfaceVariantText
+                                    onClicked: root.reloadEntry(entryRow.modelData)
+                                }
+
+                                DankActionButton {
+                                    iconName: root.pendingDeleteId === entryRow.modelData.id
+                                              ? "delete_forever" : "delete"
+                                    buttonSize: 26
+                                    iconColor: root.pendingDeleteId === entryRow.modelData.id
+                                               ? Theme.error : Theme.surfaceVariantText
+                                    onClicked: root.requestDelete(entryRow.modelData)
+                                }
+
+                                StyledText {
+                                    visible: root.pendingDeleteId === entryRow.modelData.id
+                                    text: "pulsa otra vez para borrar"
+                                    font.pixelSize: Theme.fontSizeSmall
+                                    color: Theme.error
+                                    anchors.verticalCenter: parent.verticalCenter
+                                }
+                            }
+                        }
+                    }
+                }
+
+                footer: Item {
+                    width: entryList.width
+                    height: root.page < root.pages ? 40 : 0
+                    visible: root.page < root.pages
+
+                    Rectangle {
+                        anchors.centerIn: parent
+                        width: moreLabel.implicitWidth + Theme.spacingL * 2
+                        height: 28
+                        radius: Theme.cornerRadius
+                        color: moreArea.containsMouse ? Theme.surfaceContainerHighest : Theme.surfaceContainerHigh
+
+                        StyledText {
+                            id: moreLabel
+                            anchors.centerIn: parent
+                            text: root.isLoading ? "Cargando…" : "Cargar más"
+                            font.pixelSize: Theme.fontSizeSmall
+                            color: Theme.surfaceVariantText
+                        }
+
+                        MouseArea {
+                            id: moreArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: root.loadMore()
+                        }
+                    }
+                }
+
+                }
+
+                // Estado vacío (superpuesto a la lista)
+                Column {
+                    anchors.centerIn: parent
+                    spacing: Theme.spacingS
+                    visible: root.entries.length === 0
+                    width: parent.width - Theme.spacingXL * 2
+
+                    WallabagIcon {
+                        size: 48
+                        full: true
+                        iconColor: Theme.surfaceVariantText
+                        iconOpacity: 0.5
+                        anchors.horizontalCenter: parent.horizontalCenter
+                    }
+
+                    StyledText {
+                        width: parent.width
+                        text: {
+                            if (!root.configured)
+                                return "Configura URL, client ID, usuario y secretos en Ajustes → Plugins → Wallabag"
+                            if (root.isLoading)
+                                return "Cargando entradas…"
+                            if (root.errorMessage !== "")
+                                return root.errorMessage
+                            if (root.searchTerm !== "")
+                                return "Sin resultados para «" + root.searchTerm + "»"
+                            return "No hay entradas en esta vista"
+                        }
+                        font.pixelSize: Theme.fontSizeMedium
+                        color: Theme.surfaceVariantText
+                        wrapMode: Text.WordWrap
+                        horizontalAlignment: Text.AlignHCenter
+                    }
+                }
+            }
+        }
+    }
+}
