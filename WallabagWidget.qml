@@ -26,6 +26,8 @@ PluginComponent {
     property int perPage: parseInt(pluginData.perPage) || 30
     property bool archiveOnOpen: pluginData.archiveOnOpen === true
     property bool showThumbnails: pluginData.showThumbnails !== false
+    property bool hideWhenZero: pluginData.hideWhenZero === true
+    readonly property bool pillHidden: hideWhenZero && configured && unreadTotal === 0
     property string secretsStamp: String(pluginData.secretsStamp || "")
 
     // ── Secrets (system keyring via secret-tool) ────────────────────
@@ -630,26 +632,42 @@ PluginComponent {
 
     horizontalBarPill: Component {
         Item {
-            implicitWidth: pillRow.implicitWidth
+            implicitWidth: root.pillHidden ? 0 : pillRow.implicitWidth
             implicitHeight: pillRow.implicitHeight
+            visible: !root.pillHidden
 
             Row {
                 id: pillRow
                 spacing: Theme.spacingXS
+                anchors.verticalCenter: parent.verticalCenter
 
                 WallabagIcon {
                     size: Math.max(15, root.iconSize - 2)
-                    iconColor: root.configured ? Theme.surfaceText : Theme.surfaceVariantText
+                    iconColor: {
+                        if (!root.configured)
+                            return Theme.surfaceVariantText
+                        return root.unreadTotal > 0 ? Theme.primary : Theme.surfaceText
+                    }
                     anchors.verticalCenter: parent.verticalCenter
                 }
 
-                StyledText {
+                // Unread badge: a proper pill, vertically centered with the icon
+                Rectangle {
                     visible: root.unreadTotal > 0
-                    text: WB.formatCount(root.unreadTotal)
-                    font.pixelSize: Theme.fontSizeSmall
-                    font.weight: Font.Medium
-                    color: Theme.surfaceText
+                    width: Math.max(hBadgeText.implicitWidth + 10, height)
+                    height: 16
+                    radius: height / 2
+                    color: Theme.primary
                     anchors.verticalCenter: parent.verticalCenter
+
+                    StyledText {
+                        id: hBadgeText
+                        anchors.centerIn: parent
+                        text: WB.formatCount(root.unreadTotal)
+                        font.pixelSize: Math.max(9, Math.round(Theme.fontSizeSmall * 0.8))
+                        font.weight: Font.Bold
+                        color: Theme.primaryText
+                    }
                 }
             }
         }
@@ -658,7 +676,8 @@ PluginComponent {
     verticalBarPill: Component {
         Item {
             implicitWidth: pillColumn.implicitWidth
-            implicitHeight: pillColumn.implicitHeight
+            implicitHeight: root.pillHidden ? 0 : pillColumn.implicitHeight
+            visible: !root.pillHidden
 
             Column {
                 id: pillColumn
@@ -666,18 +685,30 @@ PluginComponent {
 
                 WallabagIcon {
                     size: Math.max(15, root.iconSize - 2)
-                    iconColor: root.configured ? Theme.surfaceText : Theme.surfaceVariantText
+                    iconColor: {
+                        if (!root.configured)
+                            return Theme.surfaceVariantText
+                        return root.unreadTotal > 0 ? Theme.primary : Theme.surfaceText
+                    }
                     anchors.horizontalCenter: parent.horizontalCenter
                 }
 
-                StyledText {
+                Rectangle {
                     visible: root.unreadTotal > 0
-                    text: WB.formatCount(root.unreadTotal)
-                    font.pixelSize: Theme.fontSizeSmall
-                    font.weight: Font.Medium
-                    color: Theme.surfaceText
+                    width: Math.max(vBadgeText.implicitWidth + 10, height)
+                    height: 16
+                    radius: height / 2
+                    color: Theme.primary
                     anchors.horizontalCenter: parent.horizontalCenter
-                    horizontalAlignment: Text.AlignHCenter
+
+                    StyledText {
+                        id: vBadgeText
+                        anchors.centerIn: parent
+                        text: WB.formatCount(root.unreadTotal)
+                        font.pixelSize: Math.max(9, Math.round(Theme.fontSizeSmall * 0.8))
+                        font.weight: Font.Bold
+                        color: Theme.primaryText
+                    }
                 }
             }
         }

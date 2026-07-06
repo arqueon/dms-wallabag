@@ -250,4 +250,11 @@ PluginSettings {
         description: "Show each entry's preview picture"
         defaultValue: true
     }
+
+    ToggleSetting {
+        settingKey: "hideWhenZero"
+        label: "Hide when nothing unread"
+        description: "Collapse the bar pill while the unread count is zero"
+        defaultValue: false
+    }
 }

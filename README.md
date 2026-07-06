@@ -3,7 +3,7 @@
 [Wallabag](https://wallabag.org) plugin for [DankMaterialShell](https://danklinux.com): your
 read-it-later queue in the DankBar.
 
-<img width="583" height="704" alt="1783317495068102502" src="https://github.com/user-attachments/assets/2bc935e7-8ebd-4781-a1de-fa84d16ddf14" />
+<img width="583" alt="DMS-Wallabag popout" src="assets/screenshot.png" />
 
 - Bar pill with the wallabag logo and an unread counter (polled in the background).
 - Popout with your entries: source domain, reading time, age, preview thumbnail.
