@@ -481,10 +481,24 @@ PluginComponent {
         refreshUnread()
     }
 
+    // Opening several URLs in the same instant makes the browser drop
+    // all but the first (it is still launching / can't accept the rest).
+    // Fire them one at a time, staggered by a short delay.
+    property var _openQueue: []
+
     function batchOpen() {
-        var targets = _selectedEntries()
-        for (var i = 0; i < targets.length; i++)
-            openEntry(targets[i])
+        _openQueue = _selectedEntries()
+        _openNext()
+    }
+
+    function _openNext() {
+        if (_openQueue.length === 0)
+            return
+        var entry = _openQueue[0]
+        _openQueue = _openQueue.slice(1)
+        openEntry(entry)
+        if (_openQueue.length > 0)
+            openStaggerTimer.restart()
     }
 
     function batchArchive() {
@@ -600,6 +614,12 @@ PluginComponent {
         id: batchDeleteTimer
         interval: 3500
         onTriggered: root.batchDeleteArmed = false
+    }
+
+    Timer {
+        id: openStaggerTimer
+        interval: 350
+        onTriggered: root._openNext()
     }
 
     Timer {
