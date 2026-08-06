@@ -661,33 +661,27 @@ PluginComponent {
                 spacing: Theme.spacingXS
                 anchors.verticalCenter: parent.verticalCenter
 
-                WallabagIcon {
-                    size: Math.max(15, root.iconSize - 2)
-                    iconColor: {
+                DankIcon {
+                    name: "bookmarks"
+                    size: root.iconSize
+                    color: {
                         if (!root.configured)
                             return Theme.surfaceVariantText
-                        return root.unreadTotal > 0 ? Theme.primary : Theme.surfaceText
+                        return Theme.primary
                     }
                     anchors.verticalCenter: parent.verticalCenter
                 }
 
-                // Unread badge: a proper pill, vertically centered with the icon
-                Rectangle {
+                NumericText {
                     visible: root.unreadTotal > 0
-                    width: Math.max(hBadgeText.implicitWidth + 10, height)
-                    height: 16
-                    radius: height / 2
+                    text: WB.formatCount(root.unreadTotal)
+                    reserveText: "99+"
+                    width: reservedWidth
+                    font.pixelSize: Theme.fontSizeSmall
+                    font.weight: Font.Bold
                     color: Theme.primary
+                    horizontalAlignment: Text.AlignHCenter
                     anchors.verticalCenter: parent.verticalCenter
-
-                    StyledText {
-                        id: hBadgeText
-                        anchors.centerIn: parent
-                        text: WB.formatCount(root.unreadTotal)
-                        font.pixelSize: Math.max(9, Math.round(Theme.fontSizeSmall * 0.8))
-                        font.weight: Font.Bold
-                        color: Theme.primaryText
-                    }
                 }
             }
         }
@@ -701,34 +695,29 @@ PluginComponent {
 
             Column {
                 id: pillColumn
-                spacing: Theme.spacingXS
+                spacing: 1
 
-                WallabagIcon {
-                    size: Math.max(15, root.iconSize - 2)
-                    iconColor: {
+                DankIcon {
+                    name: "bookmarks"
+                    size: root.iconSize
+                    color: {
                         if (!root.configured)
                             return Theme.surfaceVariantText
-                        return root.unreadTotal > 0 ? Theme.primary : Theme.surfaceText
+                        return Theme.primary
                     }
                     anchors.horizontalCenter: parent.horizontalCenter
                 }
 
-                Rectangle {
+                NumericText {
                     visible: root.unreadTotal > 0
-                    width: Math.max(vBadgeText.implicitWidth + 10, height)
-                    height: 16
-                    radius: height / 2
+                    text: WB.formatCount(root.unreadTotal)
+                    reserveText: "99+"
+                    width: reservedWidth
+                    font.pixelSize: Theme.fontSizeSmall
+                    font.weight: Font.Bold
                     color: Theme.primary
+                    horizontalAlignment: Text.AlignHCenter
                     anchors.horizontalCenter: parent.horizontalCenter
-
-                    StyledText {
-                        id: vBadgeText
-                        anchors.centerIn: parent
-                        text: WB.formatCount(root.unreadTotal)
-                        font.pixelSize: Math.max(9, Math.round(Theme.fontSizeSmall * 0.8))
-                        font.weight: Font.Bold
-                        color: Theme.primaryText
-                    }
                 }
             }
         }
