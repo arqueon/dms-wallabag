@@ -661,10 +661,9 @@ PluginComponent {
                 spacing: Theme.spacingXS
                 anchors.verticalCenter: parent.verticalCenter
 
-                DankIcon {
-                    name: "bookmarks"
+                WallabagIcon {
                     size: root.iconSize
-                    color: {
+                    iconColor: {
                         if (!root.configured)
                             return Theme.surfaceVariantText
                         return Theme.primary
@@ -697,10 +696,9 @@ PluginComponent {
                 id: pillColumn
                 spacing: 1
 
-                DankIcon {
-                    name: "bookmarks"
+                WallabagIcon {
                     size: root.iconSize
-                    color: {
+                    iconColor: {
                         if (!root.configured)
                             return Theme.surfaceVariantText
                         return Theme.primary

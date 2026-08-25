@@ -10,18 +10,24 @@ import qs.Common
 Item {
     id: root
 
-    // Glyph height; width derives from the real SVG aspect ratio
+    // Nominal DMS icon box. The drawing is optically scaled inside it so the
+    // wide "w" never exceeds neighbouring Material icons.
     property int size: 18
     property bool full: false
+    property real opticalScale: full ? 1.0 : 0.72
     property color iconColor: Theme.surfaceText
     property real iconOpacity: 0.9
 
-    // wallabag-w.svg viewBox: 46.9 × 36.6
-    width: full ? size : Math.round(size * 46.9 / 36.6)
+    width: size
     height: size
 
     Image {
-        anchors.fill: parent
+        // wallabag-w.svg viewBox: 46.9 × 36.6
+        width: root.full
+               ? Math.round(root.size * root.opticalScale)
+               : Math.round(root.size * root.opticalScale * 46.9 / 36.6)
+        height: Math.round(root.size * root.opticalScale)
+        anchors.centerIn: parent
         source: Qt.resolvedUrl(root.full ? "Images/wallabag.svg" : "Images/wallabag-w.svg")
         sourceSize.width: root.width * 2
         sourceSize.height: root.height * 2
