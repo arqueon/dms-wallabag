@@ -15,6 +15,7 @@ import "./JS/wallabag.js" as WB
 
 PluginComponent {
     id: root
+    readonly property int barLabelSize: Theme.barTextSize(barThickness, barConfig ? barConfig.fontScale : undefined, barConfig ? barConfig.maximizeWidgetText : undefined)
 
     property var popoutService: null
 
@@ -666,7 +667,7 @@ PluginComponent {
                     iconColor: {
                         if (!root.configured)
                             return Theme.surfaceVariantText
-                        return Theme.primary
+                        return root.unreadTotal > 0 ? Theme.primary : Theme.widgetIconColor
                     }
                     anchors.verticalCenter: parent.verticalCenter
                 }
@@ -676,7 +677,7 @@ PluginComponent {
                     text: WB.formatCount(root.unreadTotal)
                     reserveText: "99+"
                     width: reservedWidth
-                    font.pixelSize: Theme.fontSizeSmall
+                    font.pixelSize: root.barLabelSize
                     font.weight: Font.Bold
                     color: Theme.primary
                     horizontalAlignment: Text.AlignHCenter
@@ -694,14 +695,14 @@ PluginComponent {
 
             Column {
                 id: pillColumn
-                spacing: 1
+                spacing: Theme.spacingXS / 2
 
                 WallabagIcon {
                     size: root.iconSize
                     iconColor: {
                         if (!root.configured)
                             return Theme.surfaceVariantText
-                        return Theme.primary
+                        return root.unreadTotal > 0 ? Theme.primary : Theme.widgetIconColor
                     }
                     anchors.horizontalCenter: parent.horizontalCenter
                 }
@@ -711,7 +712,7 @@ PluginComponent {
                     text: WB.formatCount(root.unreadTotal)
                     reserveText: "99+"
                     width: reservedWidth
-                    font.pixelSize: Theme.fontSizeSmall
+                    font.pixelSize: root.barLabelSize
                     font.weight: Font.Bold
                     color: Theme.primary
                     horizontalAlignment: Text.AlignHCenter
@@ -1075,7 +1076,7 @@ PluginComponent {
                                     anchors.centerIn: parent
                                     name: root.isSelected(entryRow.modelData.id)
                                           ? "check_box" : "check_box_outline_blank"
-                                    size: 18
+                                    size: Theme.iconSizeSmall + Theme.spacingXS
                                     color: root.isSelected(entryRow.modelData.id)
                                            ? Theme.primary : Theme.surfaceVariantText
                                 }
@@ -1227,7 +1228,7 @@ PluginComponent {
                                         required property string modelData
                                         width: tagLabel.implicitWidth + Theme.spacingS * 2
                                         height: 20
-                                        radius: 10
+                                        radius: Theme.cornerRadius
                                         color: Theme.withAlpha(Theme.primary, 0.15)
 
                                         StyledText {
@@ -1319,7 +1320,7 @@ PluginComponent {
                     width: parent.width - Theme.spacingXL * 2
 
                     WallabagIcon {
-                        size: 48
+                        size: Theme.iconSizeLarge * 1.5
                         full: true
                         iconColor: Theme.surfaceVariantText
                         iconOpacity: 0.5
