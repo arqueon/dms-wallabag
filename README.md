@@ -6,7 +6,9 @@ read-it-later queue in the DankBar.
 <img width="583" alt="DMS-Wallabag popout" src="assets/screenshot.png" />
 
 - Bar pill with the wallabag logo and an unread counter (polled in the background).
-- Popout with your entries: source domain, reading time, age, preview thumbnail.
+- Popout with your entries: source domain, reading time and age. Optional preview
+  thumbnails are off by default; enabling them loads images directly from the
+  original article hosts, which may contact third-party servers.
 - Click a title (or the open icon, or middle-click the row) to open it in the browser
   **without closing the popout** — open as many as you want.
 - Expand a row to see a minimal excerpt of the extracted content, its tags and origin.
@@ -35,7 +37,9 @@ read-it-later queue in the DankBar.
    secret-tool store --label='DMS Wallabag password' service dms-wallabag key password
    ```
 
-Auth uses the OAuth2 password grant with automatic refresh; tokens live only in memory.
+Auth uses the OAuth2 password grant with automatic refresh; tokens live only in
+memory. Credentials and bearer tokens are sent to `curl` through stdin, not
+process arguments.
 
 ## Licensing
 

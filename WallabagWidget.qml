@@ -7,6 +7,7 @@
 
 import QtQuick
 import Quickshell
+import Quickshell.Io
 import qs.Common
 import qs.Widgets
 import qs.Services
@@ -26,7 +27,7 @@ PluginComponent {
     property int pollIntervalMs: (parseInt(pluginData.pollInterval) || 900) * 1000
     property int perPage: parseInt(pluginData.perPage) || 30
     property bool archiveOnOpen: pluginData.archiveOnOpen === true
-    property bool showThumbnails: pluginData.showThumbnails !== false
+    property bool showThumbnails: pluginData.showThumbnails === true
     property bool hideWhenZero: pluginData.hideWhenZero === true
     readonly property bool pillHidden: hideWhenZero && configured && unreadTotal === 0
     property string secretsStamp: String(pluginData.secretsStamp || "")
@@ -108,16 +109,61 @@ PluginComponent {
         })
     }
 
+    Component {
+        id: curlRequestComponent
+        Process {
+            id: curlRequest
+            property string input: ""
+            property var callback: null
+            property bool finished: false
+            stdinEnabled: true
+            running: false
+            stdout: StdioCollector {}
+
+            function finish(output, exitCode) {
+                if (finished) return
+                finished = true
+                var done = callback
+                callback = null
+                input = ""
+                Qt.callLater(() => curlRequest.destroy())
+                if (done) done(output, exitCode)
+            }
+
+            onStarted: {
+                write(input)
+                input = ""
+                stdinEnabled = false
+            }
+            onExited: function(exitCode) { finish(stdout.text, exitCode) }
+            onRunningChanged: {
+                if (!running && !finished)
+                    Qt.callLater(() => {
+                        if (!curlRequest.running) curlRequest.finish("", -1)
+                    })
+            }
+        }
+    }
+
+    function _runCurl(argv, config, cb) {
+        var request = curlRequestComponent.createObject(root, {
+            command: argv,
+            input: config,
+            callback: cb
+        })
+        if (!request) {
+            cb("", -1)
+            return
+        }
+        request.running = true
+    }
+
     // ── OAuth ─────────────────────────────────────────────────────────────
 
     function _tokenRequest(fields, cb) {
         var argv = ["curl", "-sS", "--max-time", "20", "-w", "\n%{http_code}",
-                    "-X", "POST", baseUrl + "/oauth/v2/token"]
-        for (var key in fields) {
-            argv.push("--data-urlencode")
-            argv.push(key + "=" + fields[key])
-        }
-        Proc.runCommand("wallabag.token." + (++_reqSeq), argv, (stdout, exitCode) => {
+                    "-K", "-", "-X", "POST", baseUrl + "/oauth/v2/token"]
+        _runCurl(argv, WB.curlConfig(fields, ""), (stdout, exitCode) => {
             var res = WB.parseCurl(stdout, exitCode)
             if (res.status === 200 && res.json && res.json.access_token) {
                 accessToken = res.json.access_token
@@ -173,14 +219,8 @@ PluginComponent {
                 if (queryStr !== "")
                     url += "?" + queryStr
                 var argv = ["curl", "-sS", "--max-time", "30", "-w", "\n%{http_code}",
-                            "-X", method, "-H", "Authorization: Bearer " + accessToken, url]
-                if (form) {
-                    for (var key in form) {
-                        argv.push("--data-urlencode")
-                        argv.push(key + "=" + form[key])
-                    }
-                }
-                Proc.runCommand("wallabag.api." + (++_reqSeq), argv, (stdout, exitCode) => {
+                            "-K", "-", "-X", method, url]
+                _runCurl(argv, WB.curlConfig(form, accessToken), (stdout, exitCode) => {
                     var res = WB.parseCurl(stdout, exitCode)
                     if (res.status === 401 && retriesLeft > 0) {
                         accessToken = ""

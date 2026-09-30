@@ -44,6 +44,23 @@ function buildQuery(params) {
     return parts.join("&")
 }
 
+function curlConfig(fields, bearerToken) {
+    var lines = []
+    if (bearerToken) {
+        var token = String(bearerToken)
+        if (/[\r\n\0]/.test(token))
+            throw new Error("invalid bearer token")
+        lines.push("header = " + _curlConfigQuote("Authorization: Bearer " + token))
+    }
+    if (fields)
+        lines.push("data = " + _curlConfigQuote(buildQuery(fields)))
+    return lines.join("\n") + "\n"
+}
+
+function _curlConfigQuote(value) {
+    return '"' + String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"'
+}
+
 function domainOf(url) {
     var m = String(url || "").match(/^[a-z]+:\/\/([^\/:?#]+)/i)
     return m ? m[1].replace(/^www\./, "") : ""

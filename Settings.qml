@@ -5,6 +5,7 @@
 // (service=dms-wallabag); they are only written here, never displayed.
 
 import QtQuick
+import Quickshell.Io
 import qs.Common
 import qs.Widgets
 import qs.Modules.Plugins
@@ -29,17 +30,55 @@ PluginSettings {
             cb(false)
             return
         }
-        var escaped = trimmed.replace(/'/g, "'\\''")
-        Proc.runCommand("wallabag.settings.store." + key,
-                        ["sh", "-c",
-                         "printf %s '" + escaped + "' | secret-tool store --label='DMS Wallabag "
-                         + key + "' service dms-wallabag key " + key],
-                        (stdout, exitCode) => {
-                            var ok = exitCode === 0
-                            cb(ok)
-                            if (ok)
-                                root.saveValue("secretsStamp", String(Date.now()))
-                        })
+        var request = secretStoreComponent.createObject(root, {
+            secretKey: key,
+            pendingSecret: trimmed,
+            callback: cb
+        })
+        if (!request) {
+            cb(false)
+            return
+        }
+        request.running = true
+    }
+
+    Component {
+        id: secretStoreComponent
+        Process {
+            id: secretStore
+            property string secretKey: ""
+            property string pendingSecret: ""
+            property var callback: null
+            property bool finished: false
+            command: ["secret-tool", "store", "--label=DMS Wallabag " + secretKey,
+                      "service", "dms-wallabag", "key", secretKey]
+            stdinEnabled: true
+            running: false
+
+            function finish(ok) {
+                if (finished) return
+                finished = true
+                var done = callback
+                callback = null
+                pendingSecret = ""
+                Qt.callLater(() => secretStore.destroy())
+                if (done) done(ok)
+                if (ok) root.saveValue("secretsStamp", String(Date.now()))
+            }
+
+            onStarted: {
+                write(pendingSecret)
+                pendingSecret = ""
+                stdinEnabled = false
+            }
+            onExited: function(exitCode) { finish(exitCode === 0) }
+            onRunningChanged: {
+                if (!running && !finished)
+                    Qt.callLater(() => {
+                        if (!secretStore.running) secretStore.finish(false)
+                    })
+            }
+        }
     }
 
     Component.onCompleted: {
@@ -247,8 +286,8 @@ PluginSettings {
     ToggleSetting {
         settingKey: "showThumbnails"
         label: "Thumbnails"
-        description: "Show each entry's preview picture"
-        defaultValue: true
+        description: "Load preview pictures directly from article hosts (third parties)"
+        defaultValue: false
     }
 
     ToggleSetting {
