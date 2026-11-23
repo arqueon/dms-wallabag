@@ -297,9 +297,15 @@ PluginComponent {
         apiCall("GET", "/api/entries.json",
                 { archive: 0, perPage: 1, detail: "metadata" }, null, res => {
             if (res.status === 200 && res.json && res.json.total !== undefined) {
-                unreadTotal = res.json.total
+                var total = res.json.total
+                var hasNewUnread = total > unreadTotal
+                unreadTotal = total
                 errorMessage = ""
                 pluginService?.savePluginState(pluginId, "unreadTotal", unreadTotal)
+                // New unread items arrived: sync the entry list too, so it
+                // matches the badge without waiting for a manual update.
+                if (hasNewUnread && !isLoading && searchTerm === "")
+                    fetchEntries(true)
             } else if (entries.length === 0) {
                 errorMessage = "Error: " + WB.errorText(res)
             }
@@ -780,8 +786,10 @@ PluginComponent {
             property bool addMode: false
 
             Component.onCompleted: {
-                if (root.configured && Date.now() - root.lastUpdated > 60000)
-                    root.fetchEntries(true)
+                // Always refresh on open: entries may have been archived or
+                // read from another device since the last fetch.
+                if (root.configured && !root.isLoading)
+                    root.refreshAll()
             }
 
             Component.onDestruction: root.clearSelection()
